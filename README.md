@@ -50,14 +50,45 @@ Reddit is community-structured, norm-driven, and thread-based. That makes it eas
 
 ---
 
-## Tech Stack (suggested MVP)
-You can swap pieces easily. This repo ships with a simple default:
+## Agent Loop: Observe → Reason → Act → Remember
 
-- **Frontend:** Next.js + TypeScript + Tailwind
-- **Backend:** Next.js API routes (or Express)
-- **LLM:** OpenAI (used only for comment generation + rewrite suggestions)
-- **Storage (optional):** Supabase (saving runs) or SQLite
-- **Embeddings (optional):** for similarity / topic matching
+AgoraSim now operates as an **agentic system** with persistent memory:
+
+### 1. **Observe**
+- Loads community personas from Supabase (if configured) or falls back to static data
+- Optional: Ingests real Reddit data via official API (when `REDDIT_INGEST_ENABLED=true`)
+- Tracks all simulation runs in persistent storage
+
+### 2. **Reason**
+- Analyzes draft posts against community norms, tone, and failure triggers
+- Calculates scores using rule-based algorithms (salesy penalties, vagueness detection, norm matching)
+- Generates rewrite suggestions using OpenAI (with heuristic fallback)
+
+### 3. **Act**
+- Returns predictions: outcome (Removed/Ignored/Discussed/Upvoted), confidence, score, reasons, and rewrites
+- Provides actionable feedback to improve post quality
+
+### 4. **Remember**
+- **Every simulation is saved** to `simulation_runs` table for learning and analytics
+- Personas can be updated over time based on Reddit data ingestion
+- Feedback loop allows users to rate simulation accuracy
+
+### Memory Architecture
+
+- **Supabase-backed persistence**: All runs stored for future learning
+- **Graceful degradation**: Works perfectly without Supabase (uses static personas)
+- **Admin tools**: Seed personas, update based on real Reddit data
+- **Feature flags**: Reddit ingestion disabled by default, can be enabled when needed
+
+---
+
+## Tech Stack
+
+- **Frontend:** Next.js 14 + TypeScript + Tailwind CSS
+- **Backend:** Next.js API routes
+- **LLM:** OpenAI (optional, for rewrite generation)
+- **Storage:** Supabase (PostgreSQL) with RLS policies
+- **Reddit API:** Official Reddit API (optional, feature-flagged)
 
 ---
 
