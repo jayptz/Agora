@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { calculateScore } from "@/lib/scoring";
-import { generateRewrites } from "@/lib/rewrites";
-import { loadPersona, saveSimulationRun } from "@/lib/personas";
+import { simulatePost } from "@/lib/simulateCore";
 
 export async function POST(request: NextRequest) {
   try {
@@ -23,56 +21,17 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // Load persona from Supabase first, fallback to static
-    const { persona, source } = await loadPersona(subredditId);
-    
-    if (!persona) {
-      return NextResponse.json(
-        { error: `Subreddit ${subredditId} not found` },
-        { status: 404 }
-      );
-    }
-    
-    // Calculate score and outcome (use trained weights/thresholds if available)
-    const scoringResult = calculateScore(
-      text.trim(),
-      persona,
-      persona.weights,
-      persona.thresholds
-    );
-    
-    // Generate rewrites
-    const rewrites = await generateRewrites(text.trim(), persona, scoringResult);
-    
-    // Save to Supabase (best-effort, don't fail if this errors)
-    saveSimulationRun(
+    // Use simulateCore for all simulation logic
+    const result = await simulatePost({
+      text,
       subredditId,
-      text.trim(),
-      scoringResult.score,
-      scoringResult.outcome,
-      scoringResult.confidence,
-      scoringResult.reasons,
-      rewrites
-    ).catch((err) => {
-      console.error("Failed to save simulation run (non-fatal):", err);
     });
     
-    return NextResponse.json({
-      outcome: scoringResult.outcome,
-      confidence: scoringResult.confidence,
-      score: Math.round(scoringResult.score * 100) / 100,
-      reasons: scoringResult.reasons,
-      rewrites: rewrites.map(r => ({
-        label: r.label,
-        text: r.text,
-        rationale: r.rationale
-      })),
-      personaSource: source || "static" // Indicate where persona came from
-    });
+    return NextResponse.json(result);
   } catch (error) {
     console.error("Simulation error:", error);
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: error instanceof Error ? error.message : "Internal server error" },
       { status: 500 }
     );
   }

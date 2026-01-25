@@ -154,6 +154,72 @@ Run `supabase_phase2_migration.sql` in your Supabase SQL editor:
 
 ---
 
+## Agentic Proof Features
+
+The agent demonstrates learning through observable proof points:
+
+### 1. **Before vs After Training Proof**
+
+**POST `/api/admin/proof-run`**
+- Runs simulation BEFORE training, then rebuilds persona, then runs AFTER
+- Returns side-by-side comparison with diff:
+  - `outcomeChanged`: Did the outcome change?
+  - `scoreDelta`: Score difference
+  - `reasonsAdded`/`reasonsRemoved`: How reasoning changed
+- Stores both runs in `simulation_runs` with `training_version="before"` and `"after"`
+
+### 2. **Agent Rationale**
+
+Every simulation includes `agentRationale` - a deterministic 1-2 sentence explanation:
+- Compares draft signals (promo/specificity/firstPerson) to community norms
+- References trained policy weights/thresholds when available
+- Explains why the outcome was predicted
+
+Example: *"This community is sensitive to promotional language and rewards specific context, but your draft lacks concrete details, so it's likely to be ignored."*
+
+### 3. **Memory Indicators**
+
+Simulation responses include `memory` metadata:
+- `examplesObserved`: Number of examples used to train persona
+- `lastTrainedAt`: Timestamp of last persona rebuild
+
+Also in `personaSnapshot`:
+- `signalsFromTraining`: Promo/specificity/firstPerson rates from training data
+- `topPhrases`: Learned phrases from community examples
+- `weights`/`thresholds`: Calibrated policy parameters
+
+### 4. **Bad-Fit Training**
+
+Script: `scripts/seed_bad_fit.js`
+- Seeds 8 bad-fit examples per subreddit (startups, technology, sideproject)
+- Examples are realistic promo/CTA/hype posts
+- Helps agent learn what NOT to do
+
+### Database Schema Updates
+
+Run `supabase_agentic_proof.sql` in your Supabase SQL editor to add required columns:
+
+```sql
+-- Add last_signals to subreddit_personas (stores training signals)
+ALTER TABLE subreddit_personas
+  ADD COLUMN IF NOT EXISTS last_signals JSONB DEFAULT '{}'::jsonb;
+
+-- Ensure updated_at exists
+ALTER TABLE subreddit_personas
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+-- Add training_version to simulation_runs (optional, for before/after comparison)
+ALTER TABLE simulation_runs
+  ADD COLUMN IF NOT EXISTS training_version TEXT;
+
+-- Index for faster queries
+CREATE INDEX IF NOT EXISTS idx_simulation_runs_training_version ON simulation_runs(training_version);
+```
+
+**Note:** The code handles missing columns gracefully, so the app will work even if these migrations haven't been run yet. However, for full agentic proof features, run the migration.
+
+---
+
 ## Tech Stack
 
 - **Frontend:** Next.js 14 + TypeScript + Tailwind CSS

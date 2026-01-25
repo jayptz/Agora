@@ -1,8 +1,17 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { subreddits } from "@/data/subreddits";
+import { subreddits, getSubredditById } from "@/data/subreddits";
 import { copyToClipboard } from "@/lib/copy";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
+import { ResultCard } from "@/components/ResultCard";
 
 type Outcome = "Removed" | "Ignored" | "Discussed" | "Upvoted";
 type Confidence = "Low" | "Medium" | "High";
@@ -20,6 +29,32 @@ interface SimulationResult {
   reasons: string[];
   rewrites: Rewrite[];
   personaSource?: "supabase" | "static";
+  agentRationale?: string;
+  memory?: {
+    examplesObserved?: number;
+    lastTrainedAt?: string;
+  };
+  personaSnapshot?: {
+    name?: string;
+    subredditId?: string;
+    signalsFromTraining?: {
+      promoRate?: number;
+      specificityRate?: number;
+      firstPersonRate?: number;
+      topPhrases?: string[];
+    };
+    topPhrases?: string[];
+    weights?: Record<string, number>;
+    thresholds?: Record<string, number>;
+    memory?: {
+      examplesCount?: number;
+      lastTrainedAt?: string;
+    };
+  };
+}
+
+interface BatchResult extends SimulationResult {
+  subredditId: string;
 }
 
 const EXAMPLE_POSTS = [
@@ -40,31 +75,18 @@ const EXAMPLE_POSTS = [
   }
 ];
 
-// Demo subreddits for Phase 2
 const DEMO_SUBREDDITS = ["startups", "MachineLearning", "technology"];
 
 export default function Home() {
   const [text, setText] = useState("");
   const [subredditId, setSubredditId] = useState("startups");
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<SimulationResult | null>(null);
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [singleResult, setSingleResult] = useState<SimulationResult | null>(null);
+  const [batchResults, setBatchResults] = useState<BatchResult[] | null>(null);
+  const [lastRunType, setLastRunType] = useState<"single" | "batch" | null>(null);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
-  
-  // Admin panel state
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [adminExamples, setAdminExamples] = useState("");
-  const [adminSubredditId, setAdminSubredditId] = useState("startups");
-  const [adminLoading, setAdminLoading] = useState(false);
-  const [adminMessage, setAdminMessage] = useState<string | null>(null);
-  const [lastSignals, setLastSignals] = useState<any>(null);
-
-  // Check for admin query param on mount
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      setIsAdmin(params.get("admin") === "1");
-    }
-  }, []);
+  const [copiedBatchIndex, setCopiedBatchIndex] = useState<{ subredditId: string; index: number } | null>(null);
 
   const handleSimulate = async () => {
     if (!text.trim()) {
@@ -73,7 +95,9 @@ export default function Home() {
     }
 
     setLoading(true);
-    setResult(null);
+    setSingleResult(null);
+    setBatchResults(null);
+    setLastRunType(null);
 
     try {
       const response = await fetch("/api/simulate", {
@@ -90,12 +114,51 @@ export default function Home() {
       }
 
       const data = await response.json();
-      setResult(data);
+      setSingleResult(data);
+      setLastRunType("single");
     } catch (error) {
       console.error("Simulation error:", error);
       alert(`Error: ${error instanceof Error ? error.message : "Unknown error"}`);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleBatchSimulate = async () => {
+    if (!text.trim()) {
+      alert("Please enter some text to simulate");
+      return;
+    }
+
+    setBatchLoading(true);
+    setSingleResult(null);
+    setBatchResults(null);
+    setLastRunType(null);
+
+    try {
+      const response = await fetch("/api/simulate-batch", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Batch simulation failed");
+      }
+
+      const data = await response.json();
+      if (data.ok && data.results) {
+        setBatchResults(data.results.filter((r: any) => !r.error));
+        setLastRunType("batch");
+      }
+    } catch (error) {
+      console.error("Batch simulation error:", error);
+      alert(`Error: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setBatchLoading(false);
     }
   };
 
@@ -112,379 +175,401 @@ export default function Home() {
     }
   };
 
-  const getOutcomeColor = (outcome: Outcome) => {
-    switch (outcome) {
-      case "Removed":
-        return "bg-red-100 text-red-800 border-red-300";
-      case "Ignored":
-        return "bg-yellow-100 text-yellow-800 border-yellow-300";
-      case "Discussed":
-        return "bg-blue-100 text-blue-800 border-blue-300";
-      case "Upvoted":
-        return "bg-green-100 text-green-800 border-green-300";
+  const handleBatchCopy = async (rewriteText: string, subredditId: string, index: number) => {
+    const success = await copyToClipboard(rewriteText);
+    if (success) {
+      setCopiedBatchIndex({ subredditId, index });
+      setTimeout(() => setCopiedBatchIndex(null), 2000);
     }
   };
 
-  const getConfidenceColor = (confidence: Confidence) => {
-    switch (confidence) {
-      case "High":
-        return "bg-green-500";
-      case "Medium":
-        return "bg-yellow-500";
-      case "Low":
-        return "bg-red-500";
-    }
-  };
-
-  const handleAddExamples = async () => {
-    if (!adminExamples.trim()) {
-      setAdminMessage("Please enter some examples");
-      return;
-    }
-
-    const examples = adminExamples
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
-
-    if (examples.length === 0) {
-      setAdminMessage("Please enter at least one example");
-      return;
-    }
-
-    if (examples.length > 100) {
-      setAdminMessage("Maximum 100 examples per call");
-      return;
-    }
-
-    setAdminLoading(true);
-    setAdminMessage(null);
-
-    try {
-      const adminSecret = prompt("Enter ADMIN_SECRET:");
-      if (!adminSecret) {
-        setAdminMessage("Admin secret required");
-        return;
-      }
-
-      const response = await fetch("/api/admin/add-examples", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-admin-secret": adminSecret,
-        },
-        body: JSON.stringify({
-          subredditId: adminSubredditId,
-          examples,
-          label: "neutral",
-        }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to add examples");
-      }
-
-      setAdminMessage(`✅ Added ${data.count} examples for ${adminSubredditId}`);
-      setAdminExamples("");
-    } catch (error) {
-      console.error("Add examples error:", error);
-      setAdminMessage(`Error: ${error instanceof Error ? error.message : "Unknown error"}`);
-    } finally {
-      setAdminLoading(false);
-    }
-  };
-
-  const handleRebuildPersona = async () => {
-    setAdminLoading(true);
-    setAdminMessage(null);
-
-    try {
-      const adminSecret = prompt("Enter ADMIN_SECRET:");
-      if (!adminSecret) {
-        setAdminMessage("Admin secret required");
-        return;
-      }
-
-      const response = await fetch("/api/admin/rebuild-persona", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-admin-secret": adminSecret,
-        },
-        body: JSON.stringify({
-          subredditId: adminSubredditId,
-        }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to rebuild persona");
-      }
-
-      setLastSignals(data.signals);
-      setAdminMessage(
-        `✅ Persona rebuilt for ${adminSubredditId}. Used ${data.exampleCount} examples.`
-      );
-    } catch (error) {
-      console.error("Rebuild persona error:", error);
-      setAdminMessage(`Error: ${error instanceof Error ? error.message : "Unknown error"}`);
-    } finally {
-      setAdminLoading(false);
-    }
-  };
+  const currentResult = lastRunType === "batch" ? null : singleResult;
+  const hasResults = currentResult || batchResults;
 
   return (
-    <div className="min-h-screen py-8 px-4">
-      <div className="max-w-4xl mx-auto">
-        <header className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-gray-900 mb-2">AgoraSim</h1>
-          <p className="text-gray-600">Simulate how your Reddit post will perform before posting</p>
-        </header>
-
-        {isAdmin && (
-          <div className="bg-yellow-50 border-2 border-yellow-300 rounded-lg shadow-lg p-6 mb-6">
-            <h2 className="text-2xl font-bold text-gray-900 mb-4">Admin Panel (Phase 2 Training)</h2>
-            
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Subreddit (Demo: startups, MachineLearning, technology)
-              </label>
-              <select
-                value={adminSubredditId}
-                onChange={(e) => setAdminSubredditId(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              >
-                {DEMO_SUBREDDITS.map((id) => {
-                  const sub = subreddits.find((s) => s.id === id);
-                  return (
-                    <option key={id} value={id}>
-                      {sub?.name || id}
-                    </option>
-                  );
-                })}
-              </select>
-            </div>
-
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Paste Examples (one per line, max 100 per call, max 2000 chars each)
-              </label>
-              <textarea
-                value={adminExamples}
-                onChange={(e) => setAdminExamples(e.target.value)}
-                rows={8}
-                placeholder="Paste community examples here, one per line..."
-                className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-y font-mono text-sm"
-              />
-              <p className="mt-1 text-sm text-gray-500">
-                {adminExamples.split("\n").filter((l) => l.trim().length > 0).length} examples
-              </p>
-            </div>
-
-            <div className="flex gap-3 mb-4">
-              <button
-                onClick={handleAddExamples}
-                disabled={adminLoading || !adminExamples.trim()}
-                className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-semibold py-2 px-4 rounded-md transition-colors"
-              >
-                {adminLoading ? "Processing..." : "Add Examples"}
-              </button>
-              <button
-                onClick={handleRebuildPersona}
-                disabled={adminLoading}
-                className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-semibold py-2 px-4 rounded-md transition-colors"
-              >
-                {adminLoading ? "Training..." : "Rebuild Persona"}
-              </button>
-            </div>
-
-            {adminMessage && (
-              <div
-                className={`p-3 rounded-md mb-4 ${
-                  adminMessage.startsWith("✅")
-                    ? "bg-green-100 text-green-800"
-                    : "bg-red-100 text-red-800"
-                }`}
-              >
-                {adminMessage}
-              </div>
+    <div className="min-h-screen bg-background">
+      {/* Top Bar */}
+      <header className="border-b bg-card">
+        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold">Simulator</h1>
+            <p className="text-sm text-muted-foreground">Agentic Reddit post performance testing</p>
+          </div>
+          <div className="flex items-center gap-2">
+            {currentResult?.personaSource && (
+              <Badge variant={currentResult.personaSource === "supabase" ? "default" : "secondary"}>
+                {currentResult.personaSource === "supabase" ? "Trained" : "Static"}
+              </Badge>
             )}
-
-            {lastSignals && (
-              <div className="bg-white border border-gray-200 rounded-md p-4">
-                <h3 className="font-semibold text-gray-900 mb-2">Last Training Signals:</h3>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div>
-                    <span className="text-gray-600">Promo Rate:</span>{" "}
-                    <span className="font-mono">{(lastSignals.promoRate * 100).toFixed(1)}%</span>
-                  </div>
-                  <div>
-                    <span className="text-gray-600">Specificity Rate:</span>{" "}
-                    <span className="font-mono">{(lastSignals.specificityRate * 100).toFixed(1)}%</span>
-                  </div>
-                  <div>
-                    <span className="text-gray-600">Avg Length:</span>{" "}
-                    <span className="font-mono">{lastSignals.avgLen} chars</span>
-                  </div>
-                  <div>
-                    <span className="text-gray-600">First Person Rate:</span>{" "}
-                    <span className="font-mono">{(lastSignals.firstPersonRate * 100).toFixed(1)}%</span>
-                  </div>
-                </div>
-                {lastSignals.topPhrases && lastSignals.topPhrases.length > 0 && (
-                  <div className="mt-3">
-                    <span className="text-gray-600 text-sm">Top Phrases:</span>
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {lastSignals.topPhrases.slice(0, 10).map((phrase: string, idx: number) => (
-                        <span
-                          key={idx}
-                          className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs"
-                        >
-                          {phrase}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
+            <Badge variant="outline">Agent Active</Badge>
           </div>
-        )}
-
-        <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
-          <div className="mb-4">
-            <label htmlFor="subreddit" className="block text-sm font-medium text-gray-700 mb-2">
-              Select Subreddit
-            </label>
-            <select
-              id="subreddit"
-              value={subredditId}
-              onChange={(e) => setSubredditId(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            >
-              {subreddits.map((sub) => (
-                <option key={sub.id} value={sub.id}>
-                  {sub.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="mb-4">
-            <label htmlFor="text" className="block text-sm font-medium text-gray-700 mb-2">
-              Draft Post
-            </label>
-            <textarea
-              id="text"
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              rows={8}
-              placeholder="Paste your draft post here..."
-              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-y"
-            />
-            <p className="mt-1 text-sm text-gray-500">{text.length} characters</p>
-          </div>
-
-          <div className="mb-4">
-            <p className="text-sm font-medium text-gray-700 mb-2">Try Examples:</p>
-            <div className="flex flex-wrap gap-2">
-              {EXAMPLE_POSTS.map((example, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => handleExampleClick(example.text, example.subredditId)}
-                  className="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
-                >
-                  {example.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <button
-            onClick={handleSimulate}
-            disabled={loading || !text.trim()}
-            className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-semibold py-3 px-6 rounded-md transition-colors"
-          >
-            {loading ? "Simulating..." : "Simulate Community Reaction"}
-          </button>
         </div>
+      </header>
 
-        {result && (
-          <div className="bg-white rounded-lg shadow-lg p-6 space-y-6">
-            <div className="flex items-center justify-between">
+      {/* Main Content */}
+      <main className="container mx-auto px-4 py-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Draft Card */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Draft Post</CardTitle>
+              <CardDescription>
+                Agent will apply community-specific policy + memory.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
               <div>
-                <div className="flex items-center gap-2 mb-2">
-                  <h2 className="text-2xl font-bold text-gray-900">Results</h2>
-                  {result.personaSource && (
-                    <span className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-600 font-mono">
-                      Persona: {result.personaSource === "supabase" ? "Supabase" : "Local"}
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-4">
-                  <span className={`px-4 py-2 rounded-lg border-2 font-semibold text-lg ${getOutcomeColor(result.outcome)}`}>
-                    {result.outcome}
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-gray-600">Confidence:</span>
-                    <span className={`px-3 py-1 rounded-full text-xs font-semibold text-white ${getConfidenceColor(result.confidence)}`}>
-                      {result.confidence}
-                    </span>
-                  </div>
-                </div>
+                <label htmlFor="subreddit" className="block text-sm font-medium mb-2">
+                  Select Subreddit
+                </label>
+                <select
+                  id="subreddit"
+                  value={subredditId}
+                  onChange={(e) => setSubredditId(e.target.value)}
+                  className="w-full px-3 py-2 border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                  disabled={loading || batchLoading}
+                >
+                  {subreddits.map((sub) => (
+                    <option key={sub.id} value={sub.id}>
+                      {sub.name}
+                    </option>
+                  ))}
+                </select>
               </div>
-              <div className="text-right">
-                <div className="text-sm text-gray-600 mb-1">Score</div>
-                <div className="text-2xl font-bold text-gray-900">{result.score.toFixed(2)}</div>
-                <div className="w-32 h-2 bg-gray-200 rounded-full mt-2">
-                  <div
-                    className={`h-full rounded-full ${getConfidenceColor(result.confidence)}`}
-                    style={{ width: `${result.score * 100}%` }}
-                  />
-                </div>
-              </div>
-            </div>
 
-            <div>
-              <h3 className="text-lg font-semibold text-gray-900 mb-3">Reasons</h3>
-              <ul className="space-y-2">
-                {result.reasons.map((reason, idx) => (
-                  <li key={idx} className="flex items-start">
-                    <span className="text-blue-500 mr-2">•</span>
-                    <span className="text-gray-700">{reason}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            <div>
-              <h3 className="text-lg font-semibold text-gray-900 mb-3">Rewrite Variants</h3>
-              <div className="space-y-4">
-                {result.rewrites.map((rewrite, idx) => (
-                  <div key={idx} className="border border-gray-200 rounded-lg p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-semibold text-gray-900">{rewrite.label}</span>
-                      <button
-                        onClick={() => handleCopy(rewrite.text, idx)}
-                        className="px-3 py-1 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors"
-                      >
-                        {copiedIndex === idx ? "Copied!" : "Copy"}
-                      </button>
-                    </div>
-                    <p className="text-sm text-gray-600 mb-2 italic">{rewrite.rationale}</p>
-                    <div className="bg-gray-50 rounded p-3 text-gray-800 whitespace-pre-wrap text-sm">
-                      {rewrite.text}
-                    </div>
-                  </div>
-                ))}
+              <div>
+                <label htmlFor="text" className="block text-sm font-medium mb-2">
+                  Post Content
+                </label>
+                <textarea
+                  id="text"
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  rows={8}
+                  placeholder="Paste your draft post here..."
+                  className="w-full px-3 py-2 border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-y"
+                  disabled={loading || batchLoading}
+                />
+                <p className="mt-1 text-xs text-muted-foreground">{text.length} characters</p>
               </div>
-            </div>
-          </div>
-        )}
-      </div>
+
+              <div>
+                <p className="text-sm font-medium mb-2">Try Examples:</p>
+                <div className="flex flex-wrap gap-2">
+                  {EXAMPLE_POSTS.map((example, idx) => (
+                    <Button
+                      key={idx}
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleExampleClick(example.text, example.subredditId)}
+                      disabled={loading || batchLoading}
+                    >
+                      {example.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex gap-2">
+                <Button
+                  onClick={handleSimulate}
+                  disabled={loading || batchLoading || !text.trim()}
+                  className="flex-1"
+                >
+                  {loading ? "Agent running..." : "Simulate"}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleBatchSimulate}
+                  disabled={loading || batchLoading || !text.trim()}
+                  className="flex-1"
+                >
+                  {batchLoading ? "Running..." : "Run in all 3 communities"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Results Card */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Results</CardTitle>
+              <CardDescription>
+                {loading || batchLoading
+                  ? "Agent analyzing your post..."
+                  : hasResults
+                  ? "Simulation results and agent insights"
+                  : "Run a simulation to see how the agent reacts."}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {(loading || batchLoading) && (
+                <div className="space-y-4">
+                  <Skeleton className="h-32 w-full" />
+                  <Skeleton className="h-24 w-full" />
+                  <Skeleton className="h-24 w-full" />
+                </div>
+              )}
+
+              {!loading && !batchLoading && hasResults && (
+                <Tabs defaultValue="summary" className="w-full">
+                  <TabsList className="grid w-full grid-cols-3">
+                    <TabsTrigger value="summary">Summary</TabsTrigger>
+                    <TabsTrigger value="rewrites">Rewrites</TabsTrigger>
+                    <TabsTrigger value="agent">Agent</TabsTrigger>
+                  </TabsList>
+
+                  <TabsContent value="summary" className="space-y-4 mt-4">
+                    {currentResult ? (
+                      <ResultCard
+                        title={getSubredditById(subredditId)?.name || subredditId}
+                        outcome={currentResult.outcome}
+                        confidence={currentResult.confidence}
+                        score={currentResult.score}
+                        reasons={currentResult.reasons}
+                        bestRewrite={
+                          currentResult.rewrites[0]
+                            ? {
+                                text: currentResult.rewrites[0].text,
+                                label: currentResult.rewrites[0].label,
+                              }
+                            : undefined
+                        }
+                        personaSource={currentResult.personaSource}
+                        onCopyRewrite={
+                          currentResult.rewrites[0]
+                            ? () => handleCopy(currentResult.rewrites[0].text, 0)
+                            : undefined
+                        }
+                        copied={copiedIndex === 0}
+                      />
+                    ) : batchResults ? (
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        {batchResults.map((result) => {
+                          const subreddit = getSubredditById(result.subredditId);
+                          return (
+                            <ResultCard
+                              key={result.subredditId}
+                              title={subreddit?.name || result.subredditId}
+                              outcome={result.outcome}
+                              confidence={result.confidence}
+                              score={result.score}
+                              reasons={result.reasons}
+                              bestRewrite={
+                                result.rewrites[0]
+                                  ? {
+                                      text: result.rewrites[0].text,
+                                      label: result.rewrites[0].label,
+                                    }
+                                  : undefined
+                              }
+                              personaSource={result.personaSource}
+                              onCopyRewrite={
+                                result.rewrites[0]
+                                  ? () => handleBatchCopy(result.rewrites[0].text, result.subredditId, 0)
+                                  : undefined
+                              }
+                              copied={
+                                copiedBatchIndex?.subredditId === result.subredditId &&
+                                copiedBatchIndex?.index === 0
+                              }
+                            />
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </TabsContent>
+
+                  <TabsContent value="rewrites" className="mt-4">
+                    <ScrollArea className="h-[400px]">
+                      <div className="space-y-4">
+                        {(currentResult?.rewrites || batchResults?.[0]?.rewrites || []).length > 0 ? (
+                          (currentResult?.rewrites || batchResults?.[0]?.rewrites || []).map((rewrite, idx) => (
+                            <Card key={idx}>
+                              <CardHeader>
+                                <div className="flex items-center justify-between">
+                                  <CardTitle className="text-base">{rewrite.label}</CardTitle>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() =>
+                                      currentResult
+                                        ? handleCopy(rewrite.text, idx)
+                                        : batchResults?.[0]
+                                        ? handleBatchCopy(rewrite.text, batchResults[0].subredditId, idx)
+                                        : undefined
+                                    }
+                                  >
+                                    {((currentResult && copiedIndex === idx) ||
+                                      (batchResults?.[0] &&
+                                        copiedBatchIndex?.subredditId === batchResults[0].subredditId &&
+                                        copiedBatchIndex?.index === idx))
+                                      ? "Copied!"
+                                      : "Copy"}
+                                  </Button>
+                                </div>
+                              </CardHeader>
+                              <CardContent>
+                                <p className="text-sm text-muted-foreground mb-2 italic">{rewrite.rationale}</p>
+                                <div className="bg-muted rounded-md p-3 text-sm whitespace-pre-wrap">
+                                  {rewrite.text}
+                                </div>
+                              </CardContent>
+                            </Card>
+                          ))
+                        ) : (
+                          <p className="text-sm text-muted-foreground">No rewrites available.</p>
+                        )}
+                      </div>
+                    </ScrollArea>
+                  </TabsContent>
+
+                  <TabsContent value="agent" className="mt-4">
+                    <Collapsible defaultOpen={false}>
+                      <CollapsibleTrigger className="w-full text-left font-semibold text-sm mb-2">
+                        Show agent details
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className="space-y-4">
+                        <Card>
+                          <CardContent className="pt-6 space-y-4">
+                            {(currentResult?.personaSource || batchResults?.[0]?.personaSource) && (
+                              <div>
+                                <span className="text-sm font-medium">Persona Source: </span>
+                                <Badge
+                                  variant={
+                                    (currentResult?.personaSource || batchResults?.[0]?.personaSource) === "supabase"
+                                      ? "default"
+                                      : "secondary"
+                                  }
+                                >
+                                  {(currentResult?.personaSource || batchResults?.[0]?.personaSource) === "supabase"
+                                    ? "Trained (Supabase)"
+                                    : "Static fallback"}
+                                </Badge>
+                              </div>
+                            )}
+
+                            {(currentResult?.memory?.examplesObserved !== undefined ||
+                              batchResults?.[0]?.memory?.examplesObserved !== undefined) && (
+                              <div>
+                                <span className="text-sm font-medium">Examples Observed: </span>
+                                <span className="text-sm">
+                                  {currentResult?.memory?.examplesObserved ||
+                                    batchResults?.[0]?.memory?.examplesObserved}
+                                </span>
+                              </div>
+                            )}
+
+                            {(currentResult?.memory?.lastTrainedAt ||
+                              batchResults?.[0]?.memory?.lastTrainedAt) && (
+                              <div>
+                                <span className="text-sm font-medium">Last Trained: </span>
+                                <span className="text-sm">
+                                  {new Date(
+                                    currentResult?.memory?.lastTrainedAt ||
+                                      batchResults?.[0]?.memory?.lastTrainedAt ||
+                                      ""
+                                  ).toLocaleString()}
+                                </span>
+                              </div>
+                            )}
+
+                            {(currentResult?.agentRationale || batchResults?.[0]?.agentRationale) && (
+                              <>
+                                <Separator />
+                                <div>
+                                  <h4 className="text-sm font-semibold mb-2">Why the agent decided this</h4>
+                                  <p className="text-sm text-muted-foreground italic">
+                                    {currentResult?.agentRationale || batchResults?.[0]?.agentRationale}
+                                  </p>
+                                </div>
+                              </>
+                            )}
+
+                            {(currentResult?.personaSnapshot || batchResults?.[0]?.personaSnapshot) && (
+                              <>
+                                <Separator />
+                                <div>
+                                  <h4 className="text-sm font-semibold mb-2">Policy Snapshot</h4>
+                                  {(currentResult?.personaSnapshot?.signalsFromTraining?.topPhrases ||
+                                    currentResult?.personaSnapshot?.topPhrases ||
+                                    batchResults?.[0]?.personaSnapshot?.topPhrases) && (
+                                    <div className="mb-4">
+                                      <p className="text-xs text-muted-foreground mb-2">Top Phrases:</p>
+                                      <div className="flex flex-wrap gap-1">
+                                        {(
+                                          currentResult?.personaSnapshot?.signalsFromTraining?.topPhrases ||
+                                          currentResult?.personaSnapshot?.topPhrases ||
+                                          batchResults?.[0]?.personaSnapshot?.topPhrases ||
+                                          []
+                                        )
+                                          .slice(0, 8)
+                                          .map((phrase, idx) => (
+                                            <Badge key={idx} variant="outline" className="text-xs">
+                                              {phrase}
+                                            </Badge>
+                                          ))}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {(currentResult?.personaSnapshot?.weights ||
+                                    batchResults?.[0]?.personaSnapshot?.weights) && (
+                                    <div className="mb-4">
+                                      <p className="text-xs text-muted-foreground mb-2">Weights:</p>
+                                      <div className="bg-muted rounded-md p-2 font-mono text-xs space-y-1">
+                                        {Object.entries(
+                                          currentResult?.personaSnapshot?.weights ||
+                                            batchResults?.[0]?.personaSnapshot?.weights ||
+                                            {}
+                                        ).map(([key, value]) => (
+                                          <div key={key} className="flex justify-between">
+                                            <span>{key}:</span>
+                                            <span>{value.toFixed(2)}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {(currentResult?.personaSnapshot?.thresholds ||
+                                    batchResults?.[0]?.personaSnapshot?.thresholds) && (
+                                    <div>
+                                      <p className="text-xs text-muted-foreground mb-2">Thresholds:</p>
+                                      <div className="bg-muted rounded-md p-2 font-mono text-xs space-y-1">
+                                        {Object.entries(
+                                          currentResult?.personaSnapshot?.thresholds ||
+                                            batchResults?.[0]?.personaSnapshot?.thresholds ||
+                                            {}
+                                        ).map(([key, value]) => (
+                                          <div key={key} className="flex justify-between">
+                                            <span>{key}:</span>
+                                            <span>{value.toFixed(2)}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              </>
+                            )}
+                          </CardContent>
+                        </Card>
+                      </CollapsibleContent>
+                    </Collapsible>
+                  </TabsContent>
+                </Tabs>
+              )}
+
+              {!loading && !batchLoading && !hasResults && (
+                <div className="text-center py-12 text-muted-foreground">
+                  <p>Run a simulation to see how the agent reacts.</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </main>
     </div>
   );
 }

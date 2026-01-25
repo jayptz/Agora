@@ -5,6 +5,13 @@ import { PersonaWeights, PersonaThresholds } from "./personaTrainer";
 export interface PersonaWithPolicy extends Subreddit {
   weights?: PersonaWeights;
   thresholds?: PersonaThresholds;
+  lastSignals?: {
+    promoRate?: number;
+    specificityRate?: number;
+    firstPersonRate?: number;
+    topPhrases?: string[];
+  };
+  updatedAt?: string;
 }
 
 /**
@@ -48,6 +55,16 @@ export async function loadPersona(
           persona.thresholds = data.thresholds as PersonaThresholds;
         }
         
+        // Load last_signals if present
+        if (data.last_signals && typeof data.last_signals === 'object') {
+          persona.lastSignals = data.last_signals as PersonaWithPolicy['lastSignals'];
+        }
+        
+        // Load updated_at if present
+        if (data.updated_at) {
+          persona.updatedAt = data.updated_at;
+        }
+        
         return { persona, source: "supabase" };
       }
     } catch (error) {
@@ -74,7 +91,8 @@ export async function saveSimulationRun(
   outcome: string,
   confidence: string,
   reasons: string[],
-  rewrites: Array<{ label: string; text: string; rationale: string }>
+  rewrites: Array<{ label: string; text: string; rationale: string }>,
+  trainingVersion?: "before" | "after"
 ): Promise<{ success: boolean; runId?: string }> {
   const supabase = getSupabaseAdmin();
 
@@ -83,17 +101,24 @@ export async function saveSimulationRun(
   }
 
   try {
+    const insertData: any = {
+      subreddit_id: subredditId,
+      input_text: inputText,
+      score,
+      outcome,
+      confidence,
+      reasons,
+      rewrites,
+    };
+    
+    // Add training_version if provided (best-effort, column may not exist)
+    if (trainingVersion) {
+      insertData.training_version = trainingVersion;
+    }
+
     const { data, error } = await supabase
       .from("simulation_runs")
-      .insert({
-        subreddit_id: subredditId,
-        input_text: inputText,
-        score,
-        outcome,
-        confidence,
-        reasons,
-        rewrites,
-      })
+      .insert(insertData)
       .select("id")
       .single();
 

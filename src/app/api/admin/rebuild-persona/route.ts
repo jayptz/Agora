@@ -122,6 +122,13 @@ export async function POST(req: NextRequest) {
     discussed: 0.7
   };
 
+  const lastSignals = {
+    promoRate,
+    specificityRate,
+    firstPersonRate,
+    topPhrases: phrases.slice(0, 8),
+  };
+
   const { error: upsertErr } = await supabaseAdmin
     .from("subreddit_personas")
     .upsert({
@@ -133,13 +140,30 @@ export async function POST(req: NextRequest) {
       example_phrases: phrases,
       weights,
       thresholds,
+      last_signals: lastSignals,
       updated_at: new Date().toISOString()
     } as any, { onConflict: "subreddit_id" });
 
   if (upsertErr) return NextResponse.json({ error: upsertErr.message }, { status: 500 });
 
+  // Get examples count
+  let examplesCount: number | undefined;
+  try {
+    const { count } = await supabaseAdmin
+      .from("subreddit_examples")
+      .select("*", { count: "exact", head: true })
+      .eq("subreddit_id", id);
+    examplesCount = count || undefined;
+  } catch (e) {
+    // Ignore errors
+  }
+
   return NextResponse.json({
     ok: true,
-    signals: { promoRate, specificityRate, firstPersonRate, topPhrases: phrases.slice(0, 8) },
+    signals: lastSignals,
+    memory: {
+      examplesCount,
+      updatedAt: new Date().toISOString(),
+    },
   });
 }

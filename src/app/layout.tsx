@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AgoraSim - Reddit Post Simulator",
+  title: "Agora - Reddit Post Simulator",
   description: "Simulate how your Reddit post will perform before posting",
 };
 
