@@ -98,7 +98,12 @@ export async function simulatePost({
   );
   
   // Generate rewrites
-  const rewrites = await generateRewrites(text.trim(), persona, scoringResult);
+  const rewrites = await generateRewrites({
+    text: text.trim(),
+    subredditId,
+    persona,
+    scoringResult,
+  });
   
   // Save to Supabase (best-effort, don't fail if this errors)
   saveSimulationRun(

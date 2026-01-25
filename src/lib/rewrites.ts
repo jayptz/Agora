@@ -1,5 +1,6 @@
 import { Subreddit } from "@/data/subreddits";
 import { ScoringResult } from "./scoring";
+import { PersonaWithPolicy } from "./personas";
 
 export interface Rewrite {
   label: string;
@@ -7,23 +8,30 @@ export interface Rewrite {
   rationale: string;
 }
 
-export async function generateRewrites(
-  originalText: string,
-  persona: Subreddit,
-  scoringResult: ScoringResult
-): Promise<Rewrite[]> {
+export async function generateRewrites({
+  text,
+  subredditId,
+  persona,
+  scoringResult,
+}: {
+  text: string;
+  subredditId: string;
+  persona: PersonaWithPolicy;
+  scoringResult: ScoringResult;
+}): Promise<Rewrite[]> {
   const hasOpenAI = !!process.env.OPENAI_API_KEY;
   
   if (hasOpenAI) {
-    return await generateRewritesWithOpenAI(originalText, persona, scoringResult);
+    return await generateRewritesWithOpenAI(text, subredditId, persona, scoringResult);
   } else {
-    return generateRewritesHeuristic(originalText, persona, scoringResult);
+    return generateRewritesHeuristic(text, persona, scoringResult);
   }
 }
 
 async function generateRewritesWithOpenAI(
   originalText: string,
-  persona: Subreddit,
+  subredditId: string,
+  persona: PersonaWithPolicy,
   scoringResult: ScoringResult
 ): Promise<Rewrite[]> {
   try {
@@ -32,51 +40,125 @@ async function generateRewritesWithOpenAI(
       apiKey: process.env.OPENAI_API_KEY,
     });
 
-    const prompt = `You are helping rewrite a Reddit post for ${persona.name}.
+    // Build persona context
+    const normsList = persona.norms.map((n, i) => `${i + 1}. ${n}`).join("\n");
+    const failureTriggersList = persona.failureTriggers.map((f, i) => `${i + 1}. ${f}`).join("\n");
+    const examplePhrases = (persona.examplePhrases || []).slice(0, 8).join(", ");
+    
+    // Include weights/thresholds if available
+    let policyContext = "";
+    if (persona.weights || persona.thresholds) {
+      policyContext = "\n\nPolicy Parameters:\n";
+      if (persona.weights) {
+        policyContext += `Weights: ${JSON.stringify(persona.weights)}\n`;
+      }
+      if (persona.thresholds) {
+        policyContext += `Thresholds: ${JSON.stringify(persona.thresholds)}\n`;
+      }
+    }
 
-Original post:
+    const prompt = `You are helping rewrite a Reddit post for ${persona.name} (r/${subredditId}).
+
+Original draft:
 ${originalText}
 
-Subreddit tone: ${persona.tone}
-Norms: ${persona.norms.join(", ")}
-Issues detected: ${scoringResult.reasons.join("; ")}
+Subreddit Context:
+- Tone: ${persona.tone}
+- Community Norms:
+${normsList}
+- Failure Triggers (avoid these):
+${failureTriggersList}
+- Example Phrases Used: ${examplePhrases || "N/A"}${policyContext}
 
-Generate 3 rewrite variants as JSON array:
-1. "Conservative" - Remove CTAs, add context and clear takeaway, make it more respectful
-2. "Norm-Optimized" - Follow the structure: Context → What I tried → Result → Question, add specific details
-3. "Slightly Edgy" - Add a contrarian or provocative opener but keep it respectful and aligned with community norms
+Issues Detected in Original:
+${scoringResult.reasons.length > 0 ? scoringResult.reasons.map((r, i) => `${i + 1}. ${r}`).join("\n") : "None detected"}
 
-Return JSON only:
-[
-  {
-    "label": "Conservative",
-    "text": "...",
-    "rationale": "..."
-  },
-  {
-    "label": "Norm-Optimized",
-    "text": "...",
-    "rationale": "..."
-  },
-  {
-    "label": "Slightly Edgy",
-    "text": "...",
-    "rationale": "..."
-  }
-]`;
+Generate exactly 3 rewrite variants that are clearly tailored to r/${subredditId}. Each rewrite should feel distinct and appropriate for this specific community.
+
+Requirements:
+1. "Conservative" - Remove all promotional language, CTAs, and links. Add context and a clear, respectful takeaway. Make it safe and non-promotional.
+2. "Norm-Optimized" - Follow the community's preferred structure and norms. Use example phrases naturally. Match the tone (${persona.tone}). Include specific details, numbers, or concrete examples when possible.
+3. "Slightly Edgy" - Add a thought-provoking hook or contrarian angle, but stay within community norms. Should be engaging but still respectful and aligned with ${persona.name} standards.
+
+Important:
+- Each rewrite MUST be noticeably different and tailored to r/${subredditId}
+- Avoid generic rewrites that could work for any subreddit
+- Do NOT include direct self-promotion, links, or CTAs
+- Keep the core message but adapt the style, structure, and tone
+- Each rewrite should be complete and ready to post
+
+Return ONLY valid JSON (no markdown, no code blocks):
+{
+  "rewrites": [
+    {
+      "label": "Conservative",
+      "text": "...",
+      "rationale": "Brief explanation of why this rewrite works for r/${subredditId}"
+    },
+    {
+      "label": "Norm-Optimized",
+      "text": "...",
+      "rationale": "Brief explanation of how this matches r/${subredditId} norms"
+    },
+    {
+      "label": "Slightly Edgy",
+      "text": "...",
+      "rationale": "Brief explanation of the edgy angle and why it still fits r/${subredditId}"
+    }
+  ]
+}`;
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [{ role: "user", content: prompt }],
-      temperature: 0.7,
+      temperature: 0.8,
+      max_tokens: 1500,
+      response_format: { type: "json_object" },
     });
 
     const content = response.choices[0]?.message?.content || "";
-    const jsonMatch = content.match(/\[[\s\S]*\]/);
     
-    if (jsonMatch) {
-      const rewrites = JSON.parse(jsonMatch[0]) as Rewrite[];
-      return rewrites;
+    try {
+      const parsed = JSON.parse(content);
+      if (parsed.rewrites && Array.isArray(parsed.rewrites)) {
+        // Validate structure
+        const rewrites = parsed.rewrites
+          .filter((r: any) => r.label && r.text && r.rationale)
+          .slice(0, 3)
+          .map((r: any) => ({
+            label: r.label,
+            text: r.text.trim(),
+            rationale: r.rationale.trim(),
+          }));
+        
+        if (rewrites.length === 3) {
+          return rewrites;
+        }
+      }
+    } catch (parseError) {
+      console.error("Failed to parse OpenAI JSON response:", parseError);
+      // Try to extract JSON from markdown code blocks
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (parsed.rewrites && Array.isArray(parsed.rewrites)) {
+            const rewrites = parsed.rewrites
+              .filter((r: any) => r.label && r.text && r.rationale)
+              .slice(0, 3)
+              .map((r: any) => ({
+                label: r.label,
+                text: r.text.trim(),
+                rationale: r.rationale.trim(),
+              }));
+            if (rewrites.length === 3) {
+              return rewrites;
+            }
+          }
+        } catch (e) {
+          console.error("Failed to parse extracted JSON:", e);
+        }
+      }
     }
   } catch (error) {
     console.error("OpenAI error:", error);
@@ -88,7 +170,7 @@ Return JSON only:
 
 function generateRewritesHeuristic(
   originalText: string,
-  persona: Subreddit,
+  persona: PersonaWithPolicy,
   scoringResult: ScoringResult
 ): Rewrite[] {
   const text = originalText.trim();
@@ -122,7 +204,7 @@ function generateRewritesHeuristic(
   ];
 }
 
-function generateConservative(text: string, persona: Subreddit): string {
+function generateConservative(text: string, persona: PersonaWithPolicy): string {
   let result = text;
   
   // Remove common CTAs
@@ -152,7 +234,7 @@ function generateConservative(text: string, persona: Subreddit): string {
   return result;
 }
 
-function generateNormOptimized(text: string, persona: Subreddit): string {
+function generateNormOptimized(text: string, persona: PersonaWithPolicy): string {
   const lowerText = text.toLowerCase();
   
   // Check if already structured
@@ -192,7 +274,7 @@ function generateNormOptimized(text: string, persona: Subreddit): string {
   return `Context: ${text}\n\nWhat I tried: [Add specifics here]\n\nResult: [Add numbers/outcomes here]\n\nQuestion: What do you think?`;
 }
 
-function generateSlightlyEdgy(text: string, persona: Subreddit): string {
+function generateSlightlyEdgy(text: string, persona: PersonaWithPolicy): string {
   const openers: Record<string, string[]> = {
     startups: [
       "Unpopular opinion:",
