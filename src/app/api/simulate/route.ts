@@ -33,8 +33,13 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // Calculate score and outcome
-    const scoringResult = calculateScore(text.trim(), persona);
+    // Calculate score and outcome (use trained weights/thresholds if available)
+    const scoringResult = calculateScore(
+      text.trim(),
+      persona,
+      persona.weights,
+      persona.thresholds
+    );
     
     // Generate rewrites
     const rewrites = await generateRewrites(text.trim(), persona, scoringResult);

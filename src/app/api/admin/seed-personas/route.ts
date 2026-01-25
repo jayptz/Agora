@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
 
     const { data, error } = await supabase
       .from("subreddit_personas")
-      .upsert(upserts, {
+      .upsert(upserts as any, {
         onConflict: "subreddit_id",
       })
       .select();

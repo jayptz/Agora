@@ -1,5 +1,11 @@
 import { Subreddit, getSubredditById, subreddits } from "@/data/subreddits";
 import { getSupabaseAdmin } from "./supabaseAdmin";
+import { PersonaWeights, PersonaThresholds } from "./personaTrainer";
+
+export interface PersonaWithPolicy extends Subreddit {
+  weights?: PersonaWeights;
+  thresholds?: PersonaThresholds;
+}
 
 /**
  * Load persona from Supabase first, fallback to static data
@@ -7,7 +13,7 @@ import { getSupabaseAdmin } from "./supabaseAdmin";
  */
 export async function loadPersona(
   subredditId: string
-): Promise<{ persona: Subreddit | null; source: "supabase" | "static" | null }> {
+): Promise<{ persona: PersonaWithPolicy | null; source: "supabase" | "static" | null }> {
   const supabase = getSupabaseAdmin();
 
   // Try Supabase first if configured
@@ -21,7 +27,7 @@ export async function loadPersona(
 
       if (!error && data) {
         // Convert JSONB arrays back to string arrays
-        const persona: Subreddit = {
+        const persona: PersonaWithPolicy = {
           id: data.subreddit_id,
           name: data.name,
           tone: data.tone,
@@ -33,6 +39,15 @@ export async function loadPersona(
             ? data.example_phrases
             : [],
         };
+        
+        // Load weights and thresholds if present
+        if (data.weights && typeof data.weights === 'object') {
+          persona.weights = data.weights as PersonaWeights;
+        }
+        if (data.thresholds && typeof data.thresholds === 'object') {
+          persona.thresholds = data.thresholds as PersonaThresholds;
+        }
+        
         return { persona, source: "supabase" };
       }
     } catch (error) {

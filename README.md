@@ -82,6 +82,78 @@ AgoraSim now operates as an **agentic system** with persistent memory:
 
 ---
 
+## Phase 2: Perception + Calibration
+
+Phase 2 implements **Observe → Reason → Act → Remember** without requiring Reddit API access. The agent learns from manually seeded community examples and recalibrates its internal policy.
+
+### How It Works
+
+1. **Observe**: Manual example ingestion via `POST /api/admin/add-examples`
+   - Examples stored in `subreddit_examples` table
+   - Labels: `good_fit`, `bad_fit`, or `neutral`
+   - No Reddit API calls required
+
+2. **Reason**: Signal derivation from examples (deterministic)
+   - Top phrases (bigrams, stopword-filtered)
+   - Promo rate (CTA/sales language frequency)
+   - Specificity rate (numbers, tools, concrete artifacts)
+   - First-person rate ("I", "we", "my", "our")
+
+3. **Act**: Persona recalibration via `POST /api/admin/rebuild-persona`
+   - Generates updated norms (4-6 templated rules)
+   - Generates failure triggers (3-5 anti-patterns)
+   - Computes policy weights (salesyPenaltyWeight, vaguenessPenaltyWeight, etc.)
+   - Computes outcome thresholds (Removed/Ignored/Discussed/Upvoted boundaries)
+
+4. **Remember**: Persistent memory in Supabase
+   - Trained personas stored with `weights` and `thresholds` columns
+   - `/api/simulate` automatically uses trained parameters if available
+   - Falls back to static scoring if no training data exists
+
+### Database Schema
+
+Run `supabase_phase2_migration.sql` in your Supabase SQL editor:
+
+**New Table: `subreddit_examples`**
+- Stores agent observations (manual seed)
+- RLS enabled (read-only for public, writes via service role)
+
+**Updated Table: `subreddit_personas`**
+- `weights` (jsonb) - Learned scoring weights
+- `thresholds` (jsonb) - Learned score-to-outcome thresholds
+
+### Admin Endpoints
+
+**POST `/api/admin/add-examples`**
+- Header: `x-admin-secret: <ADMIN_SECRET>`
+- Body: `{ subredditId: string, examples: string[], label?: "good_fit"|"bad_fit"|"neutral" }`
+- Validates: 1-100 examples, each 5-2000 chars
+- Returns: `{ ok: true, inserted: number }`
+
+**POST `/api/admin/rebuild-persona`**
+- Header: `x-admin-secret: <ADMIN_SECRET>`
+- Body: `{ subredditId: string }`
+- Loads last 300 examples, computes signals, updates persona
+- Returns: `{ ok: true, signals: {...} }`
+
+### Simulation Update
+
+`POST /api/simulate` now:
+- Loads persona from Supabase (with weights/thresholds if trained)
+- Applies trained policy parameters to scoring
+- Falls back to static behavior if Supabase unavailable
+- Never crashes on Supabase failures (graceful degradation)
+
+### Constraints
+
+- ✅ No Reddit API calls
+- ✅ No web scraping  
+- ✅ Deterministic training (no LLM required)
+- ✅ Service role key never exposed to client
+- ✅ Supabase failures don't crash simulate endpoint
+
+---
+
 ## Tech Stack
 
 - **Frontend:** Next.js 14 + TypeScript + Tailwind CSS

@@ -1,4 +1,5 @@
 import { Subreddit } from "@/data/subreddits";
+import { PersonaWeights, PersonaThresholds } from "./personaTrainer";
 
 export type Outcome = "Removed" | "Ignored" | "Discussed" | "Upvoted";
 export type Confidence = "Low" | "Medium" | "High";
@@ -96,14 +97,25 @@ export function lengthPenalty(text: string): number {
   return penalty;
 }
 
-export function calculateScore(text: string, persona: Subreddit): ScoringResult {
+export function calculateScore(
+  text: string,
+  persona: Subreddit,
+  weights?: PersonaWeights,
+  thresholds?: PersonaThresholds
+): ScoringResult {
   const salesy = salesyPenalty(text);
   const vague = vaguenessPenalty(text);
   const normBonus = normMatchBonus(text, persona);
   const length = lengthPenalty(text);
   
-  const baseScore = normBonus;
-  const totalPenalty = salesy + vague + length;
+  // Apply weights if available, otherwise use defaults (1.0)
+  const salesyWeight = weights?.salesyPenaltyWeight ?? 1.0;
+  const vaguenessWeight = weights?.vaguenessPenaltyWeight ?? 1.0;
+  const normWeight = weights?.normBonusWeight ?? 1.0;
+  const lengthWeight = weights?.lengthPenaltyWeight ?? 1.0;
+  
+  const baseScore = normBonus * normWeight;
+  const totalPenalty = (salesy * salesyWeight) + (vague * vaguenessWeight) + (length * lengthWeight);
   const score = Math.max(0, Math.min(1, baseScore - totalPenalty + 0.3)); // Add base 0.3 for neutral
   
   // Generate reasons
@@ -153,13 +165,17 @@ export function calculateScore(text: string, persona: Subreddit): ScoringResult 
     }
   }
   
-  // Determine outcome
+  // Determine outcome using thresholds if available, otherwise use defaults
+  const removedThreshold = thresholds?.removed ?? 0.25;
+  const ignoredThreshold = thresholds?.ignored ?? 0.45;
+  const discussedThreshold = thresholds?.discussed ?? 0.7;
+  
   let outcome: Outcome;
-  if (score < 0.25) {
+  if (score < removedThreshold) {
     outcome = "Removed";
-  } else if (score < 0.45) {
+  } else if (score < ignoredThreshold) {
     outcome = "Ignored";
-  } else if (score < 0.7) {
+  } else if (score < discussedThreshold) {
     outcome = "Discussed";
   } else {
     outcome = "Upvoted";
@@ -168,9 +184,9 @@ export function calculateScore(text: string, persona: Subreddit): ScoringResult 
   // Determine confidence
   let confidence: Confidence;
   const distanceToBoundary = Math.min(
-    Math.abs(score - 0.25),
-    Math.abs(score - 0.45),
-    Math.abs(score - 0.7)
+    Math.abs(score - removedThreshold),
+    Math.abs(score - ignoredThreshold),
+    Math.abs(score - discussedThreshold)
   );
   
   if (distanceToBoundary > 0.15 && reasons.length >= 4) {

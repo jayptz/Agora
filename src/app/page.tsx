@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { subreddits } from "@/data/subreddits";
 import { copyToClipboard } from "@/lib/copy";
 
@@ -40,12 +40,31 @@ const EXAMPLE_POSTS = [
   }
 ];
 
+// Demo subreddits for Phase 2
+const DEMO_SUBREDDITS = ["startups", "MachineLearning", "technology"];
+
 export default function Home() {
   const [text, setText] = useState("");
   const [subredditId, setSubredditId] = useState("startups");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<SimulationResult | null>(null);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  
+  // Admin panel state
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminExamples, setAdminExamples] = useState("");
+  const [adminSubredditId, setAdminSubredditId] = useState("startups");
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminMessage, setAdminMessage] = useState<string | null>(null);
+  const [lastSignals, setLastSignals] = useState<any>(null);
+
+  // Check for admin query param on mount
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      setIsAdmin(params.get("admin") === "1");
+    }
+  }, []);
 
   const handleSimulate = async () => {
     if (!text.trim()) {
@@ -117,6 +136,106 @@ export default function Home() {
     }
   };
 
+  const handleAddExamples = async () => {
+    if (!adminExamples.trim()) {
+      setAdminMessage("Please enter some examples");
+      return;
+    }
+
+    const examples = adminExamples
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+
+    if (examples.length === 0) {
+      setAdminMessage("Please enter at least one example");
+      return;
+    }
+
+    if (examples.length > 100) {
+      setAdminMessage("Maximum 100 examples per call");
+      return;
+    }
+
+    setAdminLoading(true);
+    setAdminMessage(null);
+
+    try {
+      const adminSecret = prompt("Enter ADMIN_SECRET:");
+      if (!adminSecret) {
+        setAdminMessage("Admin secret required");
+        return;
+      }
+
+      const response = await fetch("/api/admin/add-examples", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-secret": adminSecret,
+        },
+        body: JSON.stringify({
+          subredditId: adminSubredditId,
+          examples,
+          label: "neutral",
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to add examples");
+      }
+
+      setAdminMessage(`✅ Added ${data.count} examples for ${adminSubredditId}`);
+      setAdminExamples("");
+    } catch (error) {
+      console.error("Add examples error:", error);
+      setAdminMessage(`Error: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setAdminLoading(false);
+    }
+  };
+
+  const handleRebuildPersona = async () => {
+    setAdminLoading(true);
+    setAdminMessage(null);
+
+    try {
+      const adminSecret = prompt("Enter ADMIN_SECRET:");
+      if (!adminSecret) {
+        setAdminMessage("Admin secret required");
+        return;
+      }
+
+      const response = await fetch("/api/admin/rebuild-persona", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-secret": adminSecret,
+        },
+        body: JSON.stringify({
+          subredditId: adminSubredditId,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to rebuild persona");
+      }
+
+      setLastSignals(data.signals);
+      setAdminMessage(
+        `✅ Persona rebuilt for ${adminSubredditId}. Used ${data.exampleCount} examples.`
+      );
+    } catch (error) {
+      console.error("Rebuild persona error:", error);
+      setAdminMessage(`Error: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setAdminLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen py-8 px-4">
       <div className="max-w-4xl mx-auto">
@@ -124,6 +243,116 @@ export default function Home() {
           <h1 className="text-4xl font-bold text-gray-900 mb-2">AgoraSim</h1>
           <p className="text-gray-600">Simulate how your Reddit post will perform before posting</p>
         </header>
+
+        {isAdmin && (
+          <div className="bg-yellow-50 border-2 border-yellow-300 rounded-lg shadow-lg p-6 mb-6">
+            <h2 className="text-2xl font-bold text-gray-900 mb-4">Admin Panel (Phase 2 Training)</h2>
+            
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Subreddit (Demo: startups, MachineLearning, technology)
+              </label>
+              <select
+                value={adminSubredditId}
+                onChange={(e) => setAdminSubredditId(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              >
+                {DEMO_SUBREDDITS.map((id) => {
+                  const sub = subreddits.find((s) => s.id === id);
+                  return (
+                    <option key={id} value={id}>
+                      {sub?.name || id}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Paste Examples (one per line, max 100 per call, max 2000 chars each)
+              </label>
+              <textarea
+                value={adminExamples}
+                onChange={(e) => setAdminExamples(e.target.value)}
+                rows={8}
+                placeholder="Paste community examples here, one per line..."
+                className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-y font-mono text-sm"
+              />
+              <p className="mt-1 text-sm text-gray-500">
+                {adminExamples.split("\n").filter((l) => l.trim().length > 0).length} examples
+              </p>
+            </div>
+
+            <div className="flex gap-3 mb-4">
+              <button
+                onClick={handleAddExamples}
+                disabled={adminLoading || !adminExamples.trim()}
+                className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-semibold py-2 px-4 rounded-md transition-colors"
+              >
+                {adminLoading ? "Processing..." : "Add Examples"}
+              </button>
+              <button
+                onClick={handleRebuildPersona}
+                disabled={adminLoading}
+                className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-semibold py-2 px-4 rounded-md transition-colors"
+              >
+                {adminLoading ? "Training..." : "Rebuild Persona"}
+              </button>
+            </div>
+
+            {adminMessage && (
+              <div
+                className={`p-3 rounded-md mb-4 ${
+                  adminMessage.startsWith("✅")
+                    ? "bg-green-100 text-green-800"
+                    : "bg-red-100 text-red-800"
+                }`}
+              >
+                {adminMessage}
+              </div>
+            )}
+
+            {lastSignals && (
+              <div className="bg-white border border-gray-200 rounded-md p-4">
+                <h3 className="font-semibold text-gray-900 mb-2">Last Training Signals:</h3>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <span className="text-gray-600">Promo Rate:</span>{" "}
+                    <span className="font-mono">{(lastSignals.promoRate * 100).toFixed(1)}%</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Specificity Rate:</span>{" "}
+                    <span className="font-mono">{(lastSignals.specificityRate * 100).toFixed(1)}%</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Avg Length:</span>{" "}
+                    <span className="font-mono">{lastSignals.avgLen} chars</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">First Person Rate:</span>{" "}
+                    <span className="font-mono">{(lastSignals.firstPersonRate * 100).toFixed(1)}%</span>
+                  </div>
+                </div>
+                {lastSignals.topPhrases && lastSignals.topPhrases.length > 0 && (
+                  <div className="mt-3">
+                    <span className="text-gray-600 text-sm">Top Phrases:</span>
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {lastSignals.topPhrases.slice(0, 10).map((phrase: string, idx: number) => (
+                        <span
+                          key={idx}
+                          className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs"
+                        >
+                          {phrase}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
           <div className="mb-4">

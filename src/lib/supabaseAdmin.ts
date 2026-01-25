@@ -26,3 +26,14 @@ export function getSupabaseAdmin() {
 
   return adminClient;
 }
+
+// Export singleton instance (throws if not configured - for admin endpoints)
+function getSupabaseAdminOrThrow() {
+  const client = getSupabaseAdmin();
+  if (!client) {
+    throw new Error("Supabase not configured: missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
+  }
+  return client;
+}
+
+export const supabaseAdmin = getSupabaseAdminOrThrow();
