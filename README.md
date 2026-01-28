@@ -1,4 +1,4 @@
-# Agora (MVP) — Reddit Agent Simulation for Post Performance Testing
+# Agora (MVP) — YC Hackathon Project
 
 Agora is an MVP that simulates **Reddit community reactions** to a draft post before you publish.  
 You provide a post (title + body) and pick a subreddit archetype, and the system runs a lightweight **multi-agent thread simulation** to estimate likely outcomes: engagement, sentiment, common objections, and “will this get downvoted or removed” risk.
