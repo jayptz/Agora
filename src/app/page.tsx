@@ -20,6 +20,8 @@ interface Rewrite {
   label: string;
   text: string;
   rationale: string;
+  estimatedScore?: number;
+  scoreImprovement?: number;
 }
 
 interface SimulationResult {
@@ -189,10 +191,10 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-background">
       {/* Top Bar */}
-      <header className="border-b bg-card">
+      <header className="border-b border-border bg-white">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold">Simulator</h1>
+            <h1 className="text-2xl font-bold text-black">Simulator</h1>
             <p className="text-sm text-muted-foreground">Agentic Reddit post performance testing</p>
           </div>
           <div className="flex items-center gap-2">
@@ -201,13 +203,13 @@ export default function Home() {
                 {currentResult.personaSource === "supabase" ? "Trained" : "Static"}
               </Badge>
             )}
-            <Badge variant="outline">Agent Active</Badge>
+            <Badge variant="outline" className="border-primary text-primary">Agent Active</Badge>
           </div>
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="container mx-auto px-4 py-6">
+      <main className="container mx-auto px-4 py-6 bg-white">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Draft Card */}
           <Card>
@@ -388,7 +390,24 @@ export default function Home() {
                             <Card key={idx}>
                               <CardHeader>
                                 <div className="flex items-center justify-between">
-                                  <CardTitle className="text-base">{rewrite.label}</CardTitle>
+                                  <div>
+                                    <CardTitle className="text-base">{rewrite.label}</CardTitle>
+                                    {rewrite.scoreImprovement !== undefined && rewrite.scoreImprovement > 0 && (
+                                      <p className="text-xs text-primary font-medium mt-1">
+                                        Expected improvement: +{rewrite.scoreImprovement.toFixed(2)}
+                                        {rewrite.estimatedScore !== undefined && (
+                                          <span className="text-muted-foreground ml-1">
+                                            (Score: {rewrite.estimatedScore.toFixed(2)})
+                                          </span>
+                                        )}
+                                      </p>
+                                    )}
+                                    {rewrite.scoreImprovement !== undefined && rewrite.scoreImprovement <= 0 && (
+                                      <p className="text-xs text-muted-foreground mt-1">
+                                        Score: {rewrite.estimatedScore?.toFixed(2) || "N/A"}
+                                      </p>
+                                    )}
+                                  </div>
                                   <Button
                                     variant="outline"
                                     size="sm"
