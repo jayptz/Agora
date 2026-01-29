@@ -9,12 +9,21 @@ export interface ScoringResult {
   outcome: Outcome;
   confidence: Confidence;
   reasons: string[];
+  modRisk?: boolean;
 }
 
 const SALESY_WORDS = [
   "buy", "sign up", "limited", "dm me", "join now", "click here",
   "check out", "visit", "subscribe", "purchase", "order now",
   "act now", "don't miss", "exclusive", "special offer"
+];
+
+// Severe triggers that indicate mod-level violations
+const SEVERE_TRIGGERS = [
+  "join waitlist", "waitlist", "dm me", "message me", "contact me",
+  "buy now", "purchase now", "order now", "use my referral", "referral code",
+  "discount code", "promo code", "coupon code", "http://", "https://",
+  "www.", ".com", ".io", "sign up here", "click here to"
 ];
 
 const BUZZWORDS = [
@@ -29,10 +38,10 @@ export function salesyPenalty(text: string): number {
   
   for (const word of SALESY_WORDS) {
     const matches = (lowerText.match(new RegExp(word, "gi")) || []).length;
-    penalty += matches * 0.15;
+    penalty += matches * 0.12; // Reduced from 0.15 for smoother penalty
   }
   
-  return Math.min(penalty, 0.5); // Cap at 0.5
+  return Math.min(penalty, 0.4); // Reduced cap from 0.5
 }
 
 export function vaguenessPenalty(text: string): number {
@@ -42,20 +51,20 @@ export function vaguenessPenalty(text: string): number {
   // Count buzzwords
   for (const word of BUZZWORDS) {
     const matches = (lowerText.match(new RegExp(word, "gi")) || []).length;
-    penalty += matches * 0.1;
+    penalty += matches * 0.08; // Reduced from 0.1
   }
   
   // Check for concrete indicators (numbers, specific tools/technologies)
   const hasNumbers = /\d+/.test(text);
-  const hasSpecificTools = /(api|sdk|framework|library|tool|service|platform)/i.test(text);
+  const hasSpecificTools = /(api|sdk|framework|library|tool|service|platform|aws|docker|kubernetes|next\.?js|supabase|stripe|openai|react|typescript)/i.test(text);
   const concreteIndicators = (hasNumbers ? 1 : 0) + (hasSpecificTools ? 1 : 0);
   
   // If very few concrete indicators and many buzzwords, increase penalty
-  if (concreteIndicators === 0 && penalty > 0.2) {
-    penalty += 0.2;
+  if (concreteIndicators === 0 && penalty > 0.15) {
+    penalty += 0.15; // Reduced from 0.2
   }
   
-  return Math.min(penalty, 0.4); // Cap at 0.4
+  return Math.min(penalty, 0.35); // Reduced cap from 0.4
 }
 
 export function normMatchBonus(text: string, persona: Subreddit): number {
@@ -80,7 +89,86 @@ export function normMatchBonus(text: string, persona: Subreddit): number {
     }
   }
   
-  return Math.min(bonus, 0.6); // Cap at 0.6
+  return Math.min(bonus, 0.6);
+}
+
+export function questionBonus(text: string, persona: Subreddit): number {
+  const trimmed = text.trim();
+  if (!trimmed.endsWith("?")) {
+    return 0;
+  }
+  
+  const lowerText = text.toLowerCase();
+  const questionIndicators = [
+    "anyone", "thoughts", "feedback", "what would you", "what do you",
+    "has anyone", "does anyone", "should i", "would you", "how do you",
+    "what's your", "what are your", "any advice", "any suggestions"
+  ];
+  
+  let bonus = 0.05; // Base bonus for ending with question mark
+  
+  for (const indicator of questionIndicators) {
+    if (lowerText.includes(indicator)) {
+      bonus += 0.03;
+    }
+  }
+  
+  // Persona-specific adjustments
+  if (persona.id === "startups" || persona.id === "SideProject") {
+    // Feedback questions are especially valued
+    if (lowerText.includes("feedback") || lowerText.includes("thoughts")) {
+      bonus += 0.02;
+    }
+  }
+  
+  return Math.min(bonus, 0.12);
+}
+
+export function structureBonus(text: string, persona: Subreddit): number {
+  const lowerText = text.toLowerCase();
+  let bonus = 0;
+  
+  // Check for structure markers
+  const hasContext = /context\s*:/i.test(text);
+  const hasWhatITried = /what\s+i\s+tried\s*:/i.test(lowerText);
+  const hasResult = /result\s*:/i.test(lowerText);
+  const hasQuestion = /question\s*:/i.test(lowerText);
+  const hasBullets = /^[\s]*[-*•]\s+/m.test(text);
+  
+  // Persona-specific structure preferences
+  if (persona.id === "startups") {
+    if (hasWhatITried && hasResult) {
+      bonus += 0.08;
+    }
+    if (hasContext) {
+      bonus += 0.02;
+    }
+  } else if (persona.id === "technology") {
+    if (hasContext && (hasResult || hasQuestion)) {
+      bonus += 0.06;
+    }
+    // Neutral framing is good
+    if (!hasWhatITried && !hasBullets && text.length > 100) {
+      bonus += 0.02;
+    }
+  } else if (persona.id === "SideProject" || persona.id === "sideproject") {
+    if (hasBullets || hasWhatITried) {
+      bonus += 0.05;
+    }
+    if (hasQuestion) {
+      bonus += 0.02;
+    }
+  } else {
+    // Generic structure bonus
+    if (hasContext || hasWhatITried || hasResult || hasQuestion) {
+      bonus += 0.05;
+    }
+    if (hasBullets) {
+      bonus += 0.03;
+    }
+  }
+  
+  return Math.min(bonus, 0.1);
 }
 
 export function lengthPenalty(text: string): number {
@@ -88,13 +176,23 @@ export function lengthPenalty(text: string): number {
   let penalty = 0;
   
   if (length < 40) {
-    penalty = 0.3; // Too short
+    penalty = 0.25; // Reduced from 0.3
   } else if (length > 280) {
-    penalty = (length - 280) / 1000; // Gradual penalty for very long
-    penalty = Math.min(penalty, 0.3);
+    penalty = (length - 280) / 1200; // More gradual penalty
+    penalty = Math.min(penalty, 0.25); // Reduced cap
   }
   
   return penalty;
+}
+
+export function checkSevereTriggers(text: string): boolean {
+  const lowerText = text.toLowerCase();
+  for (const trigger of SEVERE_TRIGGERS) {
+    if (lowerText.includes(trigger.toLowerCase())) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function calculateScore(
@@ -106,7 +204,10 @@ export function calculateScore(
   const salesy = salesyPenalty(text);
   const vague = vaguenessPenalty(text);
   const normBonus = normMatchBonus(text, persona);
+  const question = questionBonus(text, persona);
+  const structure = structureBonus(text, persona);
   const length = lengthPenalty(text);
+  const modRisk = checkSevereTriggers(text);
   
   // Apply weights if available, otherwise use defaults (1.0)
   const salesyWeight = weights?.salesyPenaltyWeight ?? 1.0;
@@ -114,22 +215,34 @@ export function calculateScore(
   const normWeight = weights?.normBonusWeight ?? 1.0;
   const lengthWeight = weights?.lengthPenaltyWeight ?? 1.0;
   
-  const baseScore = normBonus * normWeight;
+  // Calculate base score with bonuses
+  const baseScore = (normBonus * normWeight) + question + structure;
   const totalPenalty = (salesy * salesyWeight) + (vague * vaguenessWeight) + (length * lengthWeight);
-  const score = Math.max(0, Math.min(1, baseScore - totalPenalty + 0.3)); // Add base 0.3 for neutral
+  
+  // Start with 0.35 base (increased from 0.3) for more room to improve
+  let score = Math.max(0, Math.min(1, baseScore - totalPenalty + 0.35));
+  
+  // If severe triggers present, apply heavy penalty but don't hard-clamp to 0
+  if (modRisk) {
+    score = Math.max(0.05, score - 0.4); // Heavy penalty but allow some score
+  }
   
   // Generate reasons
   const reasons: string[] = [];
   
-  if (salesy > 0.2) {
+  if (modRisk) {
+    reasons.push(`Contains severe promotional triggers (links, waitlist, referral codes) - high mod removal risk`);
+  }
+  
+  if (salesy > 0.15) {
     reasons.push(`Sounds salesy for ${persona.name}: too many CTAs or promotional language`);
   }
   
-  if (vague > 0.25) {
+  if (vague > 0.2) {
     reasons.push(`Lacks concrete details: too many buzzwords without specific evidence or numbers`);
   }
   
-  if (length > 0.2) {
+  if (length > 0.15) {
     if (text.trim().length < 40) {
       reasons.push(`Too short: needs more context or detail for ${persona.name}`);
     } else {
@@ -146,6 +259,14 @@ export function calculateScore(
   }
   
   // Positive reasons
+  if (question > 0.05) {
+    reasons.push(`Ends with an engaging question that invites discussion`);
+  }
+  
+  if (structure > 0.05) {
+    reasons.push(`Uses clear structure that matches ${persona.name} preferences`);
+  }
+  
   if (normBonus > 0.3) {
     reasons.push(`Aligns well with ${persona.name} tone and example phrases`);
   }
@@ -171,7 +292,10 @@ export function calculateScore(
   const discussedThreshold = thresholds?.discussed ?? 0.7;
   
   let outcome: Outcome;
-  if (score < removedThreshold) {
+  // If modRisk and score is very low, force Removed
+  if (modRisk && score < 0.15) {
+    outcome = "Removed";
+  } else if (score < removedThreshold) {
     outcome = "Removed";
   } else if (score < ignoredThreshold) {
     outcome = "Ignored";
@@ -201,6 +325,7 @@ export function calculateScore(
     score,
     outcome,
     confidence,
-    reasons: reasons.slice(0, 6) // Max 6 reasons
+    reasons: reasons.slice(0, 6), // Max 6 reasons
+    modRisk,
   };
 }

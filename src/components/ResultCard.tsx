@@ -81,7 +81,7 @@ export function ResultCard({
           <ul className="space-y-1 text-sm text-muted-foreground">
             {reasons.slice(0, 3).map((reason, idx) => (
               <li key={idx} className="flex items-start">
-                <span className="text-primary mr-2">•</span>
+                <span className="text-primary mr-2 font-bold">•</span>
                 <span>{reason}</span>
               </li>
             ))}
